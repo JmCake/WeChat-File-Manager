@@ -71,6 +71,7 @@ class Window(QMainWindow):
         menu.addAction('已不存在的文件',lambda:self.open_collection('missing'))
         menu.addSeparator()
         menu.addAction('存储统计',self.statistics)
+        menu.addAction('磁盘空间分析',self.show_disk_usage)
         menu.addAction('开启 / 关闭自动监控',self.toggle_monitor)
         menu.addAction('设置与备份',self.settings)
         menu.addAction('删除记录',self.show_history)
@@ -592,6 +593,10 @@ class Window(QMainWindow):
         if self.statistics_dialog is None:self.statistics_dialog=StatisticsDialog(self.store,self)
         else:self.statistics_dialog.refresh()
         self.statistics_dialog.show();self.statistics_dialog.raise_()
+
+    def show_disk_usage(self):
+        from app.ui.disk_usage import DiskUsageDialog
+        DiskUsageDialog(self).exec()
 
     def tag_center(self):
         if not self.confirm_pending():return
