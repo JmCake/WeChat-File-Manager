@@ -1,0 +1,116 @@
+import os
+from pathlib import Path
+
+import pytest
+
+from app.disk_usage import DiskScanCancelled, scan_disk
+
+
+def test_folder_totals_include_nested_folders_and_direct_files(tmp_path):
+    first = tmp_path / '课程资料'
+    nested = first / '文档'
+    nested.mkdir(parents=True)
+    second = tmp_path / '视频'
+    second.mkdir()
+    (tmp_path / 'root.txt').write_bytes(b'xyz')
+    (first / 'notes.txt').write_bytes(b'12345')
+    (nested / 'paper.pdf').write_bytes(b'1234567')
+    (second / 'movie.mp4').write_bytes(b'0' * 11)
+
+    report = scan_disk(tmp_path)
+    root = report.nodes[report.root]
+    assert report.file_count == 4
+    assert report.folder_count == 3
+    assert root.own_bytes == 3
+    assert root.total_bytes == 26
+    assert root.total_files == 4
+    assert root.total_folders == 3
+    assert report.nodes[str(first)].total_bytes == 12
+    assert report.nodes[str(first)].total_folders == 1
+    assert report.nodes[str(second)].total_bytes == 11
+    assert report.errors == 0
+    assert report.disk_total >= report.disk_used >= 0
+
+
+def test_hardlinks_are_reported_without_understating_folder_size(tmp_path):
+    first = tmp_path / 'A'
+    second = tmp_path / 'B'
+    first.mkdir()
+    second.mkdir()
+    original = first / 'original.dat'
+    original.write_bytes(b'hard-link-test')
+    try:
+        os.link(original, second / 'copy.dat')
+    except OSError as error:
+        pytest.skip(f'文件系统不支持硬链接：{error}')
+    report = scan_disk(tmp_path)
+    assert report.nodes[report.root].total_bytes == 2 * len(b'hard-link-test')
+    assert report.repeated_hardlinks == 1
+    assert report.repeated_hardlink_bytes == len(b'hard-link-test')
+
+
+def test_symlink_is_not_followed(tmp_path):
+    (tmp_path / 'real').mkdir()
+    (tmp_path / 'real' / 'data.txt').write_bytes(b'hello')
+    try:
+        (tmp_path / 'linked').symlink_to(tmp_path / 'real', target_is_directory=True)
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f'无法建立符号链接：{error}')
+    report = scan_disk(tmp_path)
+    assert report.file_count == 1
+    assert report.nodes[report.root].total_bytes == 5
+    assert report.skipped_links == 1
+
+
+def test_cancel_does_not_return_incomplete_result(tmp_path):
+    (tmp_path / 'one.txt').write_text('data')
+    with pytest.raises(DiskScanCancelled):
+        scan_disk(tmp_path, cancelled=lambda: True)
+
+
+def test_missing_drive_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match='不存在'):
+        scan_disk(tmp_path / 'does-not-exist')
+
+
+def test_inaccessible_subdirectory_is_explicitly_reported(tmp_path, monkeypatch):
+    from app import disk_usage
+
+    blocked = tmp_path / 'private'
+    blocked.mkdir()
+    (blocked / 'hidden.txt').write_bytes(b'secret')
+    original_scandir = os.scandir
+
+    def deny_one(path):
+        if Path(path) == blocked:
+            raise PermissionError(str(path))
+        return original_scandir(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(disk_usage.os, 'scandir', deny_one)
+        report = scan_disk(tmp_path)
+
+    assert report.errors == 1
+    assert report.file_count == 0
+    assert report.nodes[str(blocked)].errors == 1
+
+
+def test_tree_lazily_loads_more_than_200_folders(tmp_path):
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    from PySide6.QtWidgets import QApplication
+    from app.ui.disk_usage import DiskUsageDialog
+
+    for i in range(205):
+        (tmp_path / f'folder-{i:03d}').mkdir()
+    report = scan_disk(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    dialog = DiskUsageDialog(autostart=False)
+    dialog.render_report(report)
+    root = dialog.tree.topLevelItem(0)
+    dialog.expand_folder(root)
+    assert root.childCount() == 201
+    more = root.child(200)
+    assert '加载更多' in more.text(0)
+    dialog.activate_item(more)
+    assert root.childCount() == 205
+    dialog.close()
