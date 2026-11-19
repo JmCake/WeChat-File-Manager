@@ -117,7 +117,11 @@ def scan_disk(root, progress=lambda _: None, cancelled=lambda: False):
                         if stat.S_ISDIR(info.st_mode):
                             # Do not cross to another filesystem when scanning
                             # a single drive; Windows junctions are excluded above.
-                            if info.st_dev != root_stat.st_dev:
+                            # Windows may report a different st_dev for
+                            # directory entries than for the drive root.
+                            # Volume mount points are reparse points and have
+                            # already been skipped above.
+                            if os.name != 'nt' and info.st_dev != root_stat.st_dev:
                                 skipped_links += 1
                                 continue
                             child_path = entry.path
