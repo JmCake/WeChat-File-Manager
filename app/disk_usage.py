@@ -135,8 +135,13 @@ def scan_disk(root, progress=lambda _: None, cancelled=lambda: False):
                             node.own_bytes += size
                             node.own_files += 1
                             files += 1
-                            if info.st_nlink > 1 and info.st_ino:
-                                identity = (info.st_dev, info.st_ino)
+                            # On Windows DirEntry.stat() always reports
+                            # zero for st_ino/st_dev/st_nlink; a separate
+                            # os.stat() call is needed for real file identity.
+                            link_info = (os.stat(entry.path, follow_symlinks=False)
+                                         if os.name == 'nt' else info)
+                            if link_info.st_nlink > 1 and link_info.st_ino:
+                                identity = (link_info.st_dev, link_info.st_ino)
                                 if identity in seen_hardlinks:
                                     repeated_hardlinks += 1
                                     repeated_hardlink_bytes += size
