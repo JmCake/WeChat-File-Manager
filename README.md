@@ -3,7 +3,7 @@ A modern, local-first WeChat file manager for Windows.
 
 ---
 
-# 微信文件管理器 1.4.0（持续开发中）
+# 微信文件管理器 1.5.0
 
 Windows 本地桌面文件管理器。主界面提供微信目录、相近名称和查找文件三个入口。目录别名、备注、标签和清理记录保存在本地 SQLite。
 
@@ -39,7 +39,7 @@ Windows 11 已完成本机验证。Windows 10 **待验证**。
 
 ## 运行
 
-自行构建后，在输出目录中双击 `WeChatFileManager.exe`。必须保留旁边的 `_internal` 文件夹；可以把整个目录移动到任意普通文件夹。无需安装 Python。
+直接在 [GitHub Releases 下载 Windows 最新版 WeChatFileManager.exe](https://github.com/JmCake/WeChat-File-Manager/releases/download/desktop-latest/WeChatFileManager.exe)，下载后双击运行即可，无需安装 Python，也不用保留 `_internal` 文件夹。单文件程序第一次启动可能比旧版稍慢，因为需要将运行库临时解压到系统临时目录。源码 `build.bat` 仍可使用旧版目录打包方式。
 
 源码运行：Python 3.11+，创建 `.venv`，执行 `pip install -r requirements.txt`，然后 `python run.py`。构建执行 `build.bat`。
 
@@ -77,7 +77,7 @@ Windows 11 已完成本机验证。Windows 10 **待验证**。
 
 V1.4 的布局、跨页清理与回归结果见 [V1.4 测试报告](docs/V1.4测试报告.md)。V1.2 的扫描对比、哈希缓存和监控延迟见 [性能数据](docs/V1.2性能测试.json)。
 
-GitHub Actions 对 Windows Server 2022/2025 执行自动化测试和原生界面自检，不自动打包、不上传安装包，也不代表 Windows 10 实机验证。
+GitHub Actions 在 Windows Server 2022/2025 运行自动化测试与原生界面自检，并在 `main` 代码更新且 Windows 单文件打包、自检成功后，自动将独立 `WeChatFileManager.exe` 更新到 `desktop-latest` Release。此验证不等于 Windows 10 实机测试。
 
 ## 开源说明
 
@@ -90,7 +90,7 @@ Windows Shell 通过 [pywin32](https://github.com/mhammond/pywin32) 调用。回
 
 ## 源码发布说明
 
-本仓库仅提供源码和必要文档，不包含预编译 EXE、微信数据或本地索引。构建入口为 `build.bat` / `package.spec`；`WeChatFileManager.spec` 为早期调试配置，保留作参考。
+本仓库提供源码和必要文档，预编译的 Windows 独立 EXE 发布在 [GitHub Releases](https://github.com/JmCake/WeChat-File-Manager/releases)。自动发布使用 `package-onefile.spec`，生成单个 `WeChatFileManager.exe`；`build.bat` / `package.spec` 仍用于目录构建；`WeChatFileManager.spec` 为早期调试配置。仓库不包含微信数据或本地索引。
 
 界面预览使用虚构账号和示例文件：
 
