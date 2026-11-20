@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal, QAbstractTableModel, QModelIndex, QSortFilterProxyModel, QIdentityProxyModel, QTimer, QUrl,QObject
-from PySide6.QtGui import QDesktopServices, QImageReader, QPixmap, QIcon, QPainter, QColor, QFontDatabase, QFont
+from PySide6.QtGui import QDesktopServices, QImageReader, QPixmap, QIcon, QPainter, QColor, QFontDatabase, QFont, QShortcut, QKeySequence
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QLineEdit,QComboBox,QPushButton,QSplitter,QTreeWidget,QTreeWidgetItem,QTableView,QLabel,QTextEdit,QCheckBox,QFormLayout,QFileDialog,QMessageBox,QInputDialog,QMenu,QDoubleSpinBox,QDialog,QDialogButtonBox,QProgressBar,QStackedWidget,QGridLayout,QScrollArea,QStyle)
 from app.core import Store, CATEGORIES, LABELS, candidates, canonical, human, export_files
 from app.version import __version__
@@ -40,12 +40,12 @@ class MonitorSignals(QObject):
 
 class Window(QMainWindow):
     def __init__(self,store, auto=True):
-        super().__init__(); self.store=store; self.worker=None; self.active=None; self.nav={}; self.directory_data={}; self.sort_order='mtime'; self.sort_desc=True
+        super().__init__(); self.store=store; self.worker=None; self.active=None; self.nav={}; self.directory_nav={}; self.directory_data={}; self.sort_order='mtime'; self.sort_desc=True; self.page_sorts={}
         font=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/'msyh.ttc'
         if font.exists(): QFontDatabase.addApplicationFont(str(font))
         self.setFont(QFont('Microsoft YaHei',10))
         self.setStyleSheet(WINDOW_STYLE)
-        self.setWindowTitle('微信文件管理器 '+__version__+' 开发版'); self.resize(1180,760)
+        self.setWindowTitle('微信文件管理器 '+__version__); self.resize(1260,800); self.setMinimumSize(990,660)
         outer=QWidget(); outer.setObjectName('workspace'); self.setCentralWidget(outer)
         shell=QVBoxLayout(outer); shell.setContentsMargins(12,10,12,8)
         header=QHBoxLayout(); shell.addLayout(header)
@@ -53,35 +53,55 @@ class Window(QMainWindow):
         header.addStretch()
         self.account=QComboBox(); self.account.setMaximumWidth(190); header.addWidget(self.account)
         self.scan_button=self.button(header,'刷新索引',self.scan)
-        self.button(header,'设置',self.settings)
         body=QHBoxLayout(); shell.addLayout(body,1)
-        sidebar=QVBoxLayout(); body.addLayout(sidebar)
+        body.setSpacing(12)
+        sidebar_host=QWidget();sidebar_host.setObjectName('sidebar')
+        sidebar_host.setFixedWidth(184);body.addWidget(sidebar_host)
+        sidebar=QVBoxLayout(sidebar_host);sidebar.setContentsMargins(10,12,10,10);sidebar.setSpacing(4)
         self.nav_buttons={}
-        for key,label,icon in [('directory','微信目录',QStyle.StandardPixmap.SP_DirIcon),
-                               ('disk','磁盘空间',QStyle.StandardPixmap.SP_DriveHDIcon),
-                               ('duplicates','相近名称',QStyle.StandardPixmap.SP_FileDialogDetailedView),
-                               ('search','查找文件',QStyle.StandardPixmap.SP_FileDialogContentsView)]:
-            button=self.button(sidebar,label,lambda checked=False,k=key:self.switch_page(k))
-            button.setProperty('nav',True);button.setCheckable(True);button.setIcon(self.style().standardIcon(icon))
+        self.shortcuts=[]
+        def heading(label):
+            title=QLabel(label);title.setProperty('sideHeading',True);sidebar.addWidget(title)
+        def nav_button(key,label,icon,shortcut=None):
+            button=QPushButton(label)
+            button.setProperty('nav',True);button.setCheckable(True)
+            button.setMinimumHeight(38);button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setIcon(self.style().standardIcon(icon))
+            button.clicked.connect(lambda checked=False,k=key:self.switch_page(k))
+            sidebar.addWidget(button)
             self.nav_buttons[key]=button
-        more=QPushButton('更多功能');more.setProperty('nav',True);sidebar.addWidget(more)
-        menu=QMenu(more)
-        menu.addAction('标签管理',self.tag_center)
-        menu.addAction('查看收藏',lambda:self.open_collection('favorite'))
-        menu.addAction('最近文件',lambda:self.open_collection('recent'))
-        menu.addAction('大文件',lambda:self.open_collection('large'))
-        menu.addAction('已不存在的文件',lambda:self.open_collection('missing'))
-        menu.addSeparator()
-        menu.addAction('存储统计',self.statistics)
-        menu.addAction('开启 / 关闭自动监控',self.toggle_monitor)
-        menu.addAction('设置与备份',self.settings)
-        menu.addAction('删除记录',self.show_history)
-        more.setMenu(menu);sidebar.addStretch()
+            if shortcut:
+                button.setToolTip('快捷键 '+shortcut)
+                action=QShortcut(QKeySequence(shortcut),self)
+                action.activated.connect(lambda k=key:self.switch_page(k))
+                self.shortcuts.append(action)
+        def tool_button(label,callback):
+            button=QPushButton(label);button.setProperty('sideTool',True)
+            button.setMinimumHeight(34);button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(callback);sidebar.addWidget(button)
+            return button
+        heading('文件管理')
+        nav_button('directory','微信目录',QStyle.StandardPixmap.SP_DirIcon,'Ctrl+1')
+        nav_button('disk','磁盘空间',QStyle.StandardPixmap.SP_DriveHDIcon,'Ctrl+2')
+        nav_button('duplicates','相近名称',QStyle.StandardPixmap.SP_FileDialogDetailedView,'Ctrl+3')
+        nav_button('search','查找文件',QStyle.StandardPixmap.SP_FileDialogContentsView,'Ctrl+4')
+        sidebar.addSpacing(12)
+        heading('快捷访问')
+        nav_button('favorite','收藏文件',QStyle.StandardPixmap.SP_DialogApplyButton)
+        nav_button('recent','最近文件',QStyle.StandardPixmap.SP_FileDialogListView)
+        nav_button('large','大文件',QStyle.StandardPixmap.SP_FileDialogDetailedView)
+        nav_button('missing','失效文件',QStyle.StandardPixmap.SP_FileIcon)
+        sidebar.addSpacing(12)
+        heading('工具')
+        tool_button('存储统计',self.statistics)
+        tool_button('标签管理',self.tag_center)
+        sidebar.addStretch()
+        self.sidebar_settings=tool_button('设置与备份',self.settings)
         layout=QVBoxLayout();body.addLayout(layout,1)
         toolbar=QHBoxLayout(); layout.addLayout(toolbar)
         self.page_title=QLabel();self.page_title.setObjectName('pageTitle');toolbar.addWidget(self.page_title)
         toolbar.addStretch()
-        self.query=QLineEdit(); self.query.setPlaceholderText('搜索文件名、标签或备注');toolbar.addWidget(self.query,1)
+        self.query=QLineEdit(); self.query.setPlaceholderText('搜索文件名、标签或备注');self.query.setClearButtonEnabled(True);self.query.setMaximumWidth(400);toolbar.addWidget(self.query,1)
         self.query.textEdited.connect(lambda _:self.switch_page('search'))
         self.query.returnPressed.connect(self.reload)
         self.pages=QStackedWidget();layout.addWidget(self.pages,1)
@@ -158,6 +178,9 @@ class Window(QMainWindow):
         for w in [self.minimum,self.maximum]: w.valueChanged.connect(lambda:self.timer.start())
         self.category.currentIndexChanged.connect(self.reload); self.account.currentIndexChanged.connect(self.rebuild_tree)
         self.model.sortRequested.connect(self.sort_changed)
+        search_shortcut=QShortcut(QKeySequence('Ctrl+F'),self)
+        search_shortcut.activated.connect(self.focus_search)
+        self.shortcuts.append(search_shortcut)
         self.tree.itemExpanded.connect(self.expand_directory)
         self.directory_mode.currentIndexChanged.connect(self.change_directory_view)
         self.delete_service=DeleteService(self.store)
@@ -186,6 +209,8 @@ class Window(QMainWindow):
         self.delete_paths([row['path'] for row in self.model.checked_rows()])
 
     def switch_page(self,page):
+        if page not in self.nav_buttons:
+            raise ValueError('未知的页面：'+str(page))
         old=self.page
         if old!=page and not self.confirm_pending():
             for key,button in self.nav_buttons.items():button.setChecked(key==old)
@@ -193,7 +218,21 @@ class Window(QMainWindow):
         if old!=page and self.edit_selection_button.isChecked():
             self.edit_selection_button.setChecked(False)
             self.edit_file_selection(False)
+        if old!=page:
+            self.page_sorts[old]=(self.sort_order,self.sort_desc)
+            self.sort_order,self.sort_desc=self.page_sorts.get(
+                page,('size',True) if page=='large' else ('mtime',True))
+            if old=='directory':
+                self.directory_nav=dict(self.nav)
         self.page=page
+        quick={'favorite':{'favorite':True},'recent':{'recent':True},
+               'large':{'large':True},'missing':{'missing':True}}
+        if page=='directory':
+            self.nav=dict(self.directory_nav)
+        elif page in quick:
+            self.nav=quick[page]
+        elif page=='search':
+            self.nav={}
         for key,button in self.nav_buttons.items():button.setChecked(key==page)
         self.account.setVisible(page not in {'duplicates','disk'})
         self.scan_button.setVisible(page!='disk')
@@ -219,19 +258,19 @@ class Window(QMainWindow):
             self.reload()
         return True
 
+    def focus_search(self):
+        if self.switch_page('search'):
+            self.query.setFocus()
+            self.query.selectAll()
+
     def show_details(self):
         self.details_button.setChecked(True)
         self.detail_scroll.show()
 
     def open_collection(self,name):
-        if not self.switch_page('directory'):return
-        iterator=self.tree.invisibleRootItem()
-        for index in range(iterator.childCount()):
-            item=iterator.child(index)
-            if (item.data(0,Qt.ItemDataRole.UserRole) or {}).get(name):
-                self.tree.setCurrentItem(item)
-                self.nav_changed()
-                break
+        if name not in {'favorite','recent','large','missing'}:
+            raise ValueError('未知的快捷入口：'+str(name))
+        return self.switch_page(name)
 
     def startup(self):
         if not self.store.accounts():
@@ -269,7 +308,7 @@ class Window(QMainWindow):
         item(smart,'相近名称',{'duplicates':True});item(smart,'大文件',{'large':True});item(smart,'存储统计',{'statistics':True});smart.setExpanded(True)
         for cat in [*CATEGORIES,'其他文件']: item(self.tree,f'{cat} ({counts.get(cat,{}).get("count",0):,})',{'category':cat})
         item(self.tree,'★ 收藏',{'favorite':True})
-        tag_root=item(self.tree,'我的标签（双击管理）',{'tags_view':True})
+        tag_root=item(self.tree,'我的标签',{'tags_view':True})
         for tag,count in sorted(self.store.tags().items()):item(tag_root,f'{tag} ({count:,})',{'tag':tag,'exact_tag':True})
         item(self.tree,'已不存在的文件',{'missing':True})
         chinese=self.directory_mode.currentIndex()==0
@@ -295,8 +334,15 @@ class Window(QMainWindow):
             else:QTreeWidgetItem(root_item,['展开以加载目录…'])
         for index in range(self.tree.topLevelItemCount()):
             node=self.tree.topLevelItem(index)
-            node.setHidden(node not in (all_item,raw))
-        raw.setExpanded(True); self.tree.setCurrentItem(all_item); self.nav={}; self.tree.blockSignals(False); self.reload()
+            data=node.data(0,Qt.ItemDataRole.UserRole) or {}
+            node.setHidden(node not in (all_item,raw,tag_root) and not data.get('category'))
+        original_index=self.tree.indexOfTopLevelItem(raw)
+        self.tree.takeTopLevelItem(original_index)
+        self.tree.insertTopLevelItem(1,raw)
+        raw.setExpanded(True);tag_root.setExpanded(bool(tag_root.childCount()))
+        self.tree.setCurrentItem(all_item);self.nav={};self.directory_nav={}
+        self.tree.blockSignals(False)
+        if self.page not in {'disk','duplicates'}:self.reload()
 
     def change_directory_view(self,index):
         previous=self.store.setting('directory:viewmode',0)
@@ -346,11 +392,13 @@ class Window(QMainWindow):
         self.tree.setCurrentItem(current);self.tree.scrollToItem(current);self.show_details()
 
     def nav_changed(self):
+        if self.page!='directory':return
         items=self.tree.selectedItems(); self.nav=items[0].data(0,Qt.ItemDataRole.UserRole) if items else {}
         self.nav=self.nav or {}
         if self.nav.get('duplicates'):self.show_duplicates();return
         if self.nav.get('statistics'):self.statistics();return
         if self.nav.get('large'):self.sort_order='size';self.sort_desc=True
+        self.directory_nav=dict(self.nav)
         self.reload()
 
     def sort_changed(self,column,order):
@@ -405,7 +453,9 @@ class Window(QMainWindow):
         selected_paths=[r['path'] for r in self.selected()] if preserve else []
         scroll=self.table.verticalScrollBar().value() if preserve else 0
         searching=self.page=='search'
-        nav={} if searching else self.nav
+        quick={'favorite':{'favorite':True},'recent':{'recent':True},
+               'large':{'large':True},'missing':{'missing':True}}
+        nav={} if searching else quick.get(self.page,self.nav)
         for w in ([self.start,self.end] if searching else []):
             text=w.text().strip()
             if text:
@@ -443,7 +493,13 @@ class Window(QMainWindow):
         self.statusBar().showMessage(text)
         self.empty_label.setVisible(not rows)
         if not rows:
-            self.empty_label.setText('没有匹配的文件，请调整搜索或筛选条件。' if searching else '此处暂无可管理的文件。请添加微信目录或刷新索引。')
+            empty={'favorite':'暂无收藏文件。可在文件详情中添加收藏。',
+                   'recent':'最近 7 天没有可管理的文件。',
+                   'large':'暂无可管理的文件。',
+                   'missing':'没有失效文件记录。'}
+            self.empty_label.setText(empty.get(self.page,
+                '没有匹配的文件，请调整搜索或筛选条件。' if searching
+                else '此处暂无可管理的文件。请添加微信目录或刷新索引。'))
         self.active_directory=None;self.detail_stack.setCurrentIndex(0)
         if nav.get('directory'):
             directory=self.store.directory_info(nav['directory']);account=nav.get('account') or (directory['account'] if directory else None)
