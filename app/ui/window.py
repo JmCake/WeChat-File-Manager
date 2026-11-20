@@ -170,7 +170,11 @@ class Window(QMainWindow):
         self.recycle_checked_button.setProperty('kind','danger')
         self.model.checksChanged.connect(self.update_file_selection)
         self.selection_bar.hide()
-        self.tree.itemSelectionChanged.connect(self.nav_changed); self.tree.itemDoubleClicked.connect(self.alias_dialog)
+        self.tree.itemSelectionChanged.connect(self.nav_changed)
+        self.tree.setExpandsOnDoubleClick(True)
+        self.tree.itemDoubleClicked.connect(self.activate_directory_item)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.directory_context_menu)
         self.table.selectionModel().selectionChanged.connect(self.selection_changed); self.table.doubleClicked.connect(lambda _:self.open_file())
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu); self.table.customContextMenuRequested.connect(self.context_menu)
         self.timer=QTimer(); self.timer.setSingleShot(True); self.timer.setInterval(220); self.timer.timeout.connect(self.reload)
@@ -427,6 +431,33 @@ class Window(QMainWindow):
         if len(children)==200:
             more=QTreeWidgetItem(item,['加载更多目录…'])
             more.setData(0,Qt.ItemDataRole.UserRole,{'more_parent':path,'offset':offset+200})
+
+    def activate_directory_item(self,item,column):
+        data=item.data(0,Qt.ItemDataRole.UserRole) or {}
+        # QTreeWidget itself expands/collapses normal folders on double click.
+        # Editing a folder's display name is an explicit context-menu action.
+        if data.get('more_parent') or data.get('tags_view'):
+            self.alias_dialog(item,column)
+
+    def directory_context_menu(self,pos):
+        item=self.tree.itemAt(pos)
+        if item is None:return
+        data=item.data(0,Qt.ItemDataRole.UserRole) or {}
+        directory=data.get('directory')
+        if not directory:return
+        menu=QMenu(self.tree)
+        menu.addAction('打开实际文件夹',lambda p=directory:self.open_directory_path(p))
+        menu.addAction('复制路径',lambda p=directory:QApplication.clipboard().setText(p))
+        menu.addSeparator()
+        menu.addAction('修改显示名称与备注',lambda i=item:self.alias_dialog(i,0))
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def open_directory_path(self,path):
+        if not Path(path).is_dir():
+            QMessageBox.warning(self,'目录不可用','目录已不存在或无法访问。')
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            QMessageBox.warning(self,'打开失败','系统未能打开所选文件夹。')
 
     def alias_dialog(self,item,column):
         data=item.data(0,Qt.ItemDataRole.UserRole) or {}; path=data.get('directory')
