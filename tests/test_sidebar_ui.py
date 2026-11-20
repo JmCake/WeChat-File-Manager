@@ -106,3 +106,34 @@ def test_global_search_focus_and_page_switches(tmp_path):
     assert window.query.text() == '资料'
     assert window.model.total == 1
     window.close()
+
+def test_folder_double_click_does_not_open_rename_dialog(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
+    app, window = demo_window(tmp_path)
+    item = window.raw_directory_root.child(0)
+    monkeypatch.setattr(QInputDialog, 'getText', lambda *args, **kwargs:
+                        (_ for _ in ()).throw(AssertionError('Unexpected rename dialog')))
+    window.activate_directory_item(item, 0)
+    assert window.tree.expandsOnDoubleClick()
+    window.close()
+
+
+def test_unsaved_edit_blocks_sidebar_navigation(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    app, window = demo_window(tmp_path)
+    window.table.selectRow(0)
+    app.processEvents()
+    assert window.active is not None
+    original = window.note.toPlainText()
+    window.note.setPlainText('未保存的内容')
+    assert window.is_dirty()
+    monkeypatch.setattr(QMessageBox, 'warning',
+                        lambda *args, **kwargs: QMessageBox.StandardButton.Cancel)
+    assert not window.switch_page('favorite')
+    assert window.page == 'directory'
+    assert window.nav_buttons['directory'].isChecked()
+    assert not window.nav_buttons['favorite'].isChecked()
+    window.note.setPlainText(original)
+    window.close()
