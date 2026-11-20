@@ -24,6 +24,7 @@ from app.ui.dialogs import DateFilter,TagDialog,ScanIssueDialog
 from app.ui.preview import PreviewController,supports_preview
 from app.ui.duplicates import NameMatchesPage
 from app.ui.statistics_view import StatisticsDialog
+from app.ui.disk_usage import DiskUsagePage
 from app.file_monitor import FileMonitor
 from app.directory_mapper import describe_directory,virtual_sections
 from app.delete_service import DeleteService
@@ -57,6 +58,7 @@ class Window(QMainWindow):
         sidebar=QVBoxLayout(); body.addLayout(sidebar)
         self.nav_buttons={}
         for key,label,icon in [('directory','微信目录',QStyle.StandardPixmap.SP_DirIcon),
+                               ('disk','磁盘空间',QStyle.StandardPixmap.SP_DriveHDIcon),
                                ('duplicates','相近名称',QStyle.StandardPixmap.SP_FileDialogDetailedView),
                                ('search','查找文件',QStyle.StandardPixmap.SP_FileDialogContentsView)]:
             button=self.button(sidebar,label,lambda checked=False,k=key:self.switch_page(k))
@@ -71,7 +73,6 @@ class Window(QMainWindow):
         menu.addAction('已不存在的文件',lambda:self.open_collection('missing'))
         menu.addSeparator()
         menu.addAction('存储统计',self.statistics)
-        menu.addAction('磁盘空间分析',self.show_disk_usage)
         menu.addAction('开启 / 关闭自动监控',self.toggle_monitor)
         menu.addAction('设置与备份',self.settings)
         menu.addAction('删除记录',self.show_history)
@@ -160,7 +161,7 @@ class Window(QMainWindow):
         self.tree.itemExpanded.connect(self.expand_directory)
         self.directory_mode.currentIndexChanged.connect(self.change_directory_view)
         self.delete_service=DeleteService(self.store)
-        self.monitor=None;self.duplicate_dialog=None;self.statistics_dialog=None;self.task_kind=''
+        self.monitor=None;self.duplicate_dialog=None;self.disk_usage_page=None;self.statistics_dialog=None;self.task_kind=''
         self.duplicate_revision=0
         self.monitor_signals=MonitorSignals(self);self.monitor_signals.updated.connect(self.monitor_updated);self.monitor_signals.status.connect(self.monitor_status)
         self.monitor_label=QLabel('空闲 · 自动监控未开启');self.monitor_label.setMaximumWidth(480);self.monitor_label.setTextFormat(Qt.TextFormat.PlainText);self.statusBar().addPermanentWidget(self.monitor_label)
@@ -194,11 +195,18 @@ class Window(QMainWindow):
             self.edit_file_selection(False)
         self.page=page
         for key,button in self.nav_buttons.items():button.setChecked(key==page)
-        self.account.setVisible(page!='duplicates')
+        self.account.setVisible(page not in {'duplicates','disk'})
+        self.scan_button.setVisible(page!='disk')
+        self.query.setVisible(page!='disk')
         self.page_title.setText(self.nav_buttons[page].text())
         if page=='duplicates':
             self.ensure_duplicates()
             self.pages.setCurrentWidget(self.duplicate_dialog)
+        elif page=='disk':
+            if self.disk_usage_page is None:
+                self.disk_usage_page=DiskUsagePage(self)
+                self.pages.addWidget(self.disk_usage_page)
+            self.pages.setCurrentWidget(self.disk_usage_page)
         else:
             self.pages.setCurrentIndex(0)
         self.directory_panel.setVisible(page=='directory')
@@ -207,7 +215,7 @@ class Window(QMainWindow):
         self.advanced_button.setVisible(page=='search')
         self.filters.setVisible(page=='search' and self.advanced_button.isChecked())
         self.detail_scroll.setVisible(self.details_button.isChecked())
-        if old!=page and page!='duplicates':
+        if old!=page and page not in {'duplicates','disk'}:
             self.reload()
         return True
 
@@ -595,8 +603,7 @@ class Window(QMainWindow):
         self.statistics_dialog.show();self.statistics_dialog.raise_()
 
     def show_disk_usage(self):
-        from app.ui.disk_usage import DiskUsageDialog
-        DiskUsageDialog(self).exec()
+        return self.switch_page('disk')
 
     def tag_center(self):
         if not self.confirm_pending():return
@@ -862,6 +869,11 @@ class Window(QMainWindow):
             iterator+=1
 
     def closeEvent(self,event):
+        if self.disk_usage_page and self.disk_usage_page.worker and self.disk_usage_page.worker.isRunning():
+            self.disk_usage_page.stop_scan()
+            QMessageBox.information(self,'磁盘扫描仍在运行','已请求停止磁盘扫描，请在扫描结束后关闭程序。')
+            event.ignore()
+            return
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption(); QMessageBox.information(self,'任务仍在运行','已请求停止扫描。请等待当前扫描或复制完成后关闭。'); event.ignore()
         elif self.confirm_pending():

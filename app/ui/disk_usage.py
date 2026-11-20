@@ -4,7 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
+    QComboBox, QWidget, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
     QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
 
@@ -38,14 +38,11 @@ class DiskScanWorker(QThread):
             self.done.emit({'error': str(error)})
 
 
-class DiskUsageDialog(QDialog):
+class DiskUsagePage(QWidget):
     def __init__(self, parent=None, autostart=True):
         super().__init__(parent)
-        self.setWindowTitle('磁盘空间分析')
-        self.resize(1020, 700)
         self.worker = None
         self.report = None
-        self._close_requested = False
 
         layout = QVBoxLayout(self)
         controls = QHBoxLayout()
@@ -137,8 +134,6 @@ class DiskUsageDialog(QDialog):
         self.scan_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.busy.hide()
-        if self._close_requested:
-            QTimer.singleShot(0, self.accept)
 
     def render_report(self, report):
         self.report = report
@@ -227,10 +222,3 @@ class DiskUsageDialog(QDialog):
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
             QMessageBox.warning(self, '打开失败', '无法打开所选文件夹。')
 
-    def closeEvent(self, event):
-        if self.worker and self.worker.isRunning():
-            self._close_requested = True
-            self.stop_scan()
-            event.ignore()
-        else:
-            event.accept()

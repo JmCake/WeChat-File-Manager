@@ -98,13 +98,13 @@ def test_inaccessible_subdirectory_is_explicitly_reported(tmp_path, monkeypatch)
 def test_tree_lazily_loads_more_than_200_folders(tmp_path):
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     from PySide6.QtWidgets import QApplication
-    from app.ui.disk_usage import DiskUsageDialog
+    from app.ui.disk_usage import DiskUsagePage
 
     for i in range(205):
         (tmp_path / f'folder-{i:03d}').mkdir()
     report = scan_disk(tmp_path)
     app = QApplication.instance() or QApplication([])
-    dialog = DiskUsageDialog(autostart=False)
+    dialog = DiskUsagePage(autostart=False)
     dialog.render_report(report)
     root = dialog.tree.topLevelItem(0)
     dialog.expand_folder(root)
@@ -114,3 +114,54 @@ def test_tree_lazily_loads_more_than_200_folders(tmp_path):
     dialog.activate_item(more)
     assert root.childCount() == 205
     dialog.close()
+
+def test_disk_usage_is_a_primary_embedded_page(tmp_path, monkeypatch):
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    import time
+
+    from PySide6.QtWidgets import QApplication
+    from app.core import Store
+    from app.ui import disk_usage
+    from app.ui.window import Window
+
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / 'wxid_demo' / 'msg' / 'file'
+    source.mkdir(parents=True)
+    (source / '微信附件.txt').write_bytes(b'wechat')
+    store = Store(tmp_path / 'index.sqlite')
+    store.add(source.parents[1])
+    store.scan()
+    drive = tmp_path / 'disk'
+    folder = drive / '学习资料'
+    folder.mkdir(parents=True)
+    (folder / '笔记.txt').write_bytes(b'123456')
+    monkeypatch.setattr(disk_usage, 'fixed_drives', lambda: [str(drive)])
+
+    window = Window(store, auto=False)
+    assert 'disk' in window.nav_buttons
+    assert window.nav_buttons['disk'].text() == '磁盘空间'
+    assert window.switch_page('disk')
+    page = window.disk_usage_page
+    assert page is not None
+    assert window.pages.currentWidget() is page
+    assert page.parentWidget() is window.pages
+    assert window.nav_buttons['disk'].isChecked()
+    assert not window.query.isVisibleTo(window)
+    assert not window.scan_button.isVisibleTo(window)
+
+    deadline = time.monotonic() + 8
+    while (page.report is None or (page.worker and page.worker.isRunning())) and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(.01)
+    app.processEvents()
+    assert page.report is not None
+    assert page.report.nodes[page.report.root].total_bytes == 6
+    assert page.tree.topLevelItem(0) is not None
+    assert store.search(query='微信附件')
+
+    assert window.switch_page('search')
+    assert window.pages.currentWidget() is not page
+    assert window.switch_page('disk')
+    assert window.disk_usage_page is page
+    assert page.report is not None
+    window.close()
