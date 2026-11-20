@@ -22,7 +22,9 @@ def demo_window(tmp_path):
     store = Store(tmp_path / 'index.sqlite')
     store.add(root)
     store.scan()
-    store.annotate(str(doc), '查阅资料', '课业', True)
+    indexed_path = store.search(query='资料')[0]['path']
+    store.annotate(indexed_path, '查阅资料', '课业', True)
+    assert len(store.search(favorite=True)) == 1
     window = Window(store, auto=False)
     window.show()
     app.processEvents()
