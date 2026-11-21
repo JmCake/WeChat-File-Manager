@@ -181,7 +181,11 @@ class Window(QMainWindow):
         self.tree.itemDoubleClicked.connect(self.activate_directory_item)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.directory_context_menu)
-        self.table.selectionModel().selectionChanged.connect(self.selection_changed); self.table.doubleClicked.connect(lambda _:self.open_file())
+        self.table.selectionModel().selectionChanged.connect(self.selection_changed)
+        self.table.selectionModel().selectionChanged.connect(
+            lambda *_: self.select_highlighted_button.setEnabled(
+                self.model.checkable and bool(self.selected())))
+        self.table.doubleClicked.connect(lambda _:self.open_file())
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu); self.table.customContextMenuRequested.connect(self.context_menu)
         self.timer=QTimer(); self.timer.setSingleShot(True); self.timer.setInterval(220); self.timer.timeout.connect(self.reload)
         for w in [self.query,self.start,self.end,self.tag_filter]: w.textChanged.connect(lambda:self.timer.start())
@@ -216,7 +220,7 @@ class Window(QMainWindow):
     def update_file_selection(self):
         count=len(self.model.checked_paths)
         self.selection_count.setText(f'已勾选 {count:,} 个文件（当前加载 {len(self.model.rows):,} / {self.model.total:,}）')
-        self.select_highlighted_button.setEnabled(bool(self.selected()))
+        self.select_highlighted_button.setEnabled(self.model.checkable and bool(self.selected()))
         self.select_all_loaded_button.setEnabled(bool(self.model.rows))
         self.clear_checks_button.setEnabled(count>0)
         self.recycle_checked_button.setEnabled(count>0 and not (self.worker and self.worker.isRunning()))
