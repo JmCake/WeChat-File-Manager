@@ -119,7 +119,7 @@ class Window(QMainWindow):
         row.addStretch()
         self.details_button=self.button(row,'详情',lambda:self.detail_scroll.setVisible(self.details_button.isChecked()))
         self.details_button.setCheckable(True)
-        self.edit_selection_button=self.button(row,'编辑选择',self.edit_file_selection)
+        self.edit_selection_button=self.button(row,'批量选择',self.edit_file_selection)
         self.edit_selection_button.setCheckable(True)
         self.filters=QWidget();browser_layout.addWidget(self.filters)
         filters=QGridLayout(self.filters);filters.setContentsMargins(0,0,0,0)
@@ -211,7 +211,7 @@ class Window(QMainWindow):
 
     def edit_file_selection(self,enabled):
         self.model.set_checkable(enabled)
-        self.edit_selection_button.setText('完成选择' if enabled else '编辑选择')
+        self.edit_selection_button.setText('完成选择' if enabled else '批量选择')
         self.selection_bar.setVisible(enabled)
 
     def select_highlighted_files(self):
