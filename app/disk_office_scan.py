@@ -150,3 +150,41 @@ def scan_office_matches(root, include_pdf=False, cancelled=lambda: False,
         'groups': len(groups), 'errors': errors, 'skipped_links': skipped_links,
         'root': root,
     }
+
+
+def scan_similar_folders(root, cancelled=lambda: False, progress=lambda _: None):
+    """Find repeated folder names throughout one drive, including subfolders.
+
+    Folder comparisons are read-only, never candidates for directory deletion.
+    """
+    from app.disk_usage import scan_disk
+
+    report = scan_disk(root, cancelled=cancelled, progress=progress)
+    buckets = defaultdict(list)
+    for path, node in report.nodes.items():
+        if cancelled():
+            raise DiskScanCancelled()
+        if path == report.root or node.name.casefold() in EXCLUDED_FOLDERS:
+            continue
+        normalized = unicodedata.normalize('NFKC', node.name).casefold()
+        normalized = re.sub(r'[\uff08\uff09]', lambda m: '(' if m.group() == '\uff08' else ')', normalized)
+        base = ''.join(char for char in VERSION_SUFFIX.sub('', normalized)
+                       if char.isalnum())
+        if len(base) < 2 or NOISE_NAME.fullmatch(base):
+            continue
+        buckets[base].append({
+            'path': path, 'name': node.name, 'size': node.total_bytes,
+            'category': '文件夹', 'file_type': '文件夹',
+            'account': report.root, 'account_name': str(Path(path).parent),
+            'source': 'folder',
+        })
+    groups = [sorted(rows, key=lambda row: row['path'])
+              for rows in buckets.values() if len(rows) > 1]
+    groups.sort(key=lambda rows: (-len(rows), -sum(row['size'] for row in rows),
+                                  rows[0]['name'].casefold()))
+    return groups, {
+        'folders': report.folder_count, 'files': report.file_count,
+        'office_files': 0, 'groups': len(groups),
+        'errors': report.errors, 'skipped_links': report.skipped_links,
+        'root': report.root,
+    }
