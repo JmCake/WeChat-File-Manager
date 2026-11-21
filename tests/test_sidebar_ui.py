@@ -139,3 +139,25 @@ def test_unsaved_edit_blocks_sidebar_navigation(tmp_path, monkeypatch):
     assert not window.nav_buttons['favorite'].isChecked()
     window.note.setPlainText(original)
     window.close()
+
+
+def test_reload_clears_selection_and_reactivates_file_details(tmp_path):
+    app, window = demo_window(tmp_path)
+    assert window.switch_page('search')
+    window.query.setText('资料')
+    window.reload()
+    window.table.selectRow(0)
+    app.processEvents()
+    assert window.active and window.active['name'] == '资料.txt'
+
+    window.reload()
+    assert window.active is None
+    assert not window.table.selectionModel().hasSelection()
+
+    window.table.selectRow(0)
+    app.processEvents()
+    assert window.active and window.active['name'] == '资料.txt'
+    window.note.setPlainText('回归测试备注')
+    assert window.save_note()
+    assert window.store.search(query='回归测试备注')
+    window.close()

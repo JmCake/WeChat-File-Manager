@@ -18,7 +18,14 @@ def run(window,data):
     store.rename(store.accounts()[0]['path'],'演示账号（虚构）','')
     window.update_accounts();window.rebuild_tree();window.switch_page('search');window.query.setText('公开示例');window.reload()
     assert window.model.rowCount()==1
-    window.table.selectRow(0);QApplication.processEvents();window.note.setPlainText('演示备注');window.tags.setText('演示');window.favorite.setChecked(True);assert window.save_note()
+    window.table.clearSelection()
+    window.table.selectRow(0)
+    QApplication.processEvents()
+    assert window.active is not None and window.active['name']=='公开示例.txt'
+    window.note.setPlainText('演示备注')
+    window.tags.setText('演示')
+    window.favorite.setChecked(True)
+    assert window.save_note()
     before=digest(document);result=export_files(window.selected(),folder/'export',protected=[source.parents[2]])
     assert result['copied']==1 and digest(document)==before
     backup=folder/'backup.sqlite';store.backup(backup);store.annotate(window.active['path'],'changed','',False);store.restore(backup)

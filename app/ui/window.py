@@ -537,6 +537,10 @@ class Window(QMainWindow):
         rows=page.rows
         self.preview_controller.clear();self.preview_image=None
         self.preview.hide();self.preview_text.hide()
+        # A reset may keep row 0 selected in QItemSelectionModel without
+        # emitting selectionChanged again. Clear first so the next explicit
+        # row click always activates its details and edit actions.
+        self.table.clearSelection()
         self.active=None; self.model.configure(self.store,filters,self.sort_order,self.sort_desc,page); self.info.setText('选择文件查看详情'); self.path.clear(); self.note.clear(); self.tags.clear(); self.preview.clear(); self.favorite.setChecked(False)
         if self.model.checkable:self.model.clear_checks()
         d=self.directory_data.get(nav.get('directory'))
