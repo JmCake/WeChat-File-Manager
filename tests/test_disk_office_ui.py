@@ -56,7 +56,7 @@ def test_main_navigation_and_diskwide_office_cleanup(tmp_path, monkeypatch):
     wait_for(app, lambda: page.matches and not window.worker.isRunning())
     assert len(page.matches) == 1
     group = page.groups.topLevelItem(0)
-    assert not bool(group.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    assert bool(group.flags() & Qt.ItemFlag.ItemIsUserCheckable)
     group.setExpanded(True)
     app.processEvents()
     assert group.childCount() == 2
