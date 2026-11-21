@@ -49,6 +49,19 @@ class FilesModel(QAbstractTableModel):
             self.dataChanged.emit(self.index(0,0),self.index(len(self.rows)-1,0),[Qt.ItemDataRole.CheckStateRole])
         self.checksChanged.emit()
 
+    def check_paths(self, paths):
+        if not self.checkable:
+            return
+        available = {row['path'] for row in self.rows}
+        self.checked_paths.update(set(paths) & available)
+        if self.rows:
+            self.dataChanged.emit(self.index(0,0),self.index(len(self.rows)-1,0),
+                                  [Qt.ItemDataRole.CheckStateRole])
+        self.checksChanged.emit()
+
+    def check_all_loaded(self):
+        self.check_paths(row['path'] for row in self.rows)
+
     def configure(self,store,filters,order,descending,page):
         self.beginResetModel()
         self.store=store;self.filters=filters;self.order=order;self.descending=descending
