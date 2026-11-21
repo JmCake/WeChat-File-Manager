@@ -79,9 +79,11 @@ def test_sidebar_previews_and_only_checked_files_enter_recycle(tmp_path, monkeyp
     page.groups.setCurrentItem(nodes[picture.name])
     wait_for(app, lambda: page.preview_image is not None)
     group.setCheckState(0,Qt.CheckState.Checked)
-    assert len(page.checked)==3
+    assert len(page.checked)==2  # Group bulk selection keeps one file
     nodes[original.name].setCheckState(0,Qt.CheckState.Unchecked)
     nodes[pdf_path.name].setCheckState(0,Qt.CheckState.Unchecked)
+    if canonical(picture) not in page.checked:
+        nodes[picture.name].setCheckState(0,Qt.CheckState.Checked)
     assert group.checkState(0)==Qt.CheckState.PartiallyChecked
     assert list(page.checked) == [canonical(picture)]
     results = []
@@ -132,13 +134,16 @@ def test_group_checkbox_covers_unexpanded_and_paginated_members(tmp_path):
     first,second=(page.groups.topLevelItem(i) for i in range(2))
     assert second.childCount()==0
     second.setCheckState(0,Qt.CheckState.Checked)
-    assert len(page.checked)==155 and blocked['path'] not in page.checked
-    assert first.checkState(0)==Qt.CheckState.Checked
+    assert len(page.checked)==154 and blocked['path'] not in page.checked
+    keeper = next(row['path'] for row in rows if row['path'] not in page.checked)
+    assert first.checkState(0) in (Qt.CheckState.Checked, Qt.CheckState.PartiallyChecked)
     first.child(0).setCheckState(0,Qt.CheckState.Unchecked)
     assert second.checkState(0)==Qt.CheckState.PartiallyChecked
     second.setExpanded(True)
     page.load_members(second)
-    assert second.child(154).checkState(0)==Qt.CheckState.Checked
+    assert second.child(154).checkState(0)==(
+        Qt.CheckState.Unchecked if rows[154]['path'] == keeper
+        else Qt.CheckState.Checked)
     page.clear_selection()
     assert not page.checked and second.checkState(0)==Qt.CheckState.Unchecked
     window.close()

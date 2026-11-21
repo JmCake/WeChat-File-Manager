@@ -129,11 +129,17 @@ class NameMatchesPage(QWidget):
         self.more_button = QPushButton('更多文件组')
         self.more_button.clicked.connect(self.load_groups)
         footer.addWidget(self.more_button)
-        self.selection_label = QLabel()
-        footer.addWidget(self.selection_label, 1)
+        self.group_select_button = QPushButton('当前组批量勾选')
+        self.group_select_button.clicked.connect(self.select_current_group)
+        footer.addWidget(self.group_select_button)
+        self.select_all_button = QPushButton('全部组批量勾选')
+        self.select_all_button.clicked.connect(self.select_all_groups)
+        footer.addWidget(self.select_all_button)
         self.clear_button = QPushButton('清空勾选')
         self.clear_button.clicked.connect(self.clear_selection)
         footer.addWidget(self.clear_button)
+        self.selection_label = QLabel()
+        footer.addWidget(self.selection_label, 1)
         self.recycle_button = QPushButton()
         self.recycle_button.setProperty('kind', 'danger')
         self.recycle_button.clicked.connect(self.preview_cleanup)
@@ -194,25 +200,84 @@ class NameMatchesPage(QWidget):
                 ])
                 group.setData(0, self.role, rows)
                 group.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
-                eligible = {
-                    row['path']:row for row in rows
-                    if (self.disk_mode and row.get('source') == 'disk' and row.get('snapshot'))
-                    or (not self.disk_mode and not self.folder_mode
-                        and deletion_path_allowed(row['path'],row['account']))
-                }
+                eligible = self.eligible_rows(rows)
                 self.group_files[group] = eligible
                 for path in eligible:
                     self.groups_by_path.setdefault(path,set()).add(group)
                 if eligible:
-                    if self.disk_mode:
-                        group.setToolTip(0,'请展开后逐个勾选，并至少保留一份；相近名称不代表内容相同。')
-                        group.setFlags(group.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-                    else:
-                        group.setToolTip(0,'勾选整组可处理文件；展开后可取消勾选要保留的文件。')
-                        self.update_group_check(group)
+                    group.setToolTip(0, '整组勾选' if self.folder_mode else
+                                     '整组批量选择；办公文档每组自动保留一份。')
+                    self.update_group_check(group)
                 else:
                     group.setFlags(group.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
         self.more_button.setVisible(self.groups.topLevelItemCount() < len(self.matches))
+
+    def eligible_rows(self, rows):
+        if self.folder_mode:
+            return {row['path']: row for row in rows if row.get('source') == 'folder'}
+        if self.disk_mode:
+            return {row['path']: row for row in rows
+                    if row.get('source') == 'disk' and row.get('snapshot')}
+        return {row['path']: row for row in rows
+                if deletion_path_allowed(row['path'], row['account'])}
+
+    @staticmethod
+    def keeper_path(rows):
+        # Deterministic conservative choice: prefer the most recently modified
+        # candidate, then the larger file. This is not content verification.
+        if not rows:
+            return None
+        return max(rows, key=lambda row: (
+            (row.get('snapshot') or (0, 0))[1] or row.get('mtime', 0),
+            row.get('size', 0), row['path']))['path']
+
+    def _set_checked_paths(self, selected, paths_to_clear=()):
+        for path in paths_to_clear:
+            self.checked.pop(path, None)
+        self.checked.update(selected)
+        self.checked_size = sum(row['size'] for row in self.checked.values())
+        with QSignalBlocker(self.groups):
+            for path, members in self.visible_members.items():
+                state = Qt.CheckState.Checked if path in self.checked else Qt.CheckState.Unchecked
+                for member in members:
+                    member.setCheckState(0, state)
+            for group in self.group_files:
+                self.update_group_check(group)
+        self.update_selection()
+
+    def _select_group_rows(self, rows):
+        eligible = self.eligible_rows(rows)
+        if self.folder_mode:
+            return eligible
+        keeper = self.keeper_path(list(eligible.values()))
+        return {path: row for path, row in eligible.items() if path != keeper}
+
+    def select_current_group(self):
+        current = self.groups.currentItem()
+        if current is None:
+            return
+        group = current.parent() or current
+        rows = group.data(0, self.role)
+        if not isinstance(rows, list):
+            return
+        selected = self._select_group_rows(rows)
+        keeper = self.keeper_path(list(self.eligible_rows(rows).values()))
+        self._set_checked_paths(selected, (keeper,) if keeper and not self.folder_mode else ())
+
+    def select_all_groups(self):
+        # Operates on all scan results, not just the 150 rendered groups.
+        selected = {}
+        protected = set()
+        for rows in self.matches:
+            eligible = self.eligible_rows(rows)
+            selected.update(self._select_group_rows(rows))
+            if not self.folder_mode:
+                keeper = self.keeper_path(list(eligible.values()))
+                if keeper:
+                    protected.add(keeper)
+        for path in protected:
+            selected.pop(path, None)
+        self._set_checked_paths(selected, protected)
 
     def expand_group(self, item):
         if item.parent() is None and item.childCount() == 0:
@@ -247,62 +312,69 @@ class NameMatchesPage(QWidget):
         if column != 0:
             return
         parent = item.parent()
+        group = parent or item
+        eligible = self.group_files.get(group, {})
+        if not eligible:
+            return
         if parent is None:
-            rows = self.group_files.get(item, {}).values()
-        else:
-            row = item.data(0,self.role)
-            if not row or row['path'] not in self.group_files.get(parent,{}):
+            desired = item.checkState(0) != Qt.CheckState.Unchecked
+            selected = self._select_group_rows(group.data(0, self.role)) if desired else {}
+            self._set_checked_paths(selected, (
+                path for path in eligible if path not in selected
+            ))
+            return
+        row = item.data(0, self.role)
+        if not row or row['path'] not in eligible:
+            return
+        path = row['path']
+        if item.checkState(0) == Qt.CheckState.Checked:
+            if not self.folder_mode and all(
+                peer == path or peer in self.checked for peer in eligible
+            ):
+                # Keep at least one file in any name-matched group.
+                self._set_checked_paths({}, (path,))
                 return
-            rows = (row,)
-        checked = item.checkState(0) == Qt.CheckState.Checked
-        affected = set()
-        with QSignalBlocker(self.groups):
-            for row in rows:
-                path = row['path']
-                if checked and path not in self.checked:
-                    self.checked[path] = row
-                    self.checked_size += row['size']
-                elif not checked and path in self.checked:
-                    self.checked_size -= self.checked.pop(path)['size']
-                for member in self.visible_members.get(path,()):
-                    member.setCheckState(0,Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
-                affected.update(self.groups_by_path.get(path, ()))
-            for group in affected:
-                if not self.disk_mode:
-                    self.update_group_check(group)
-        self.update_selection()
+            self._set_checked_paths({path: row})
+        else:
+            self._set_checked_paths({}, (path,))
 
     def update_group_check(self, group):
         paths = self.group_files[group]
         count = sum(path in self.checked for path in paths)
         state = (Qt.CheckState.Unchecked if not count else
-                 Qt.CheckState.Checked if count==len(paths) else Qt.CheckState.PartiallyChecked)
-        group.setCheckState(0,state)
+                 Qt.CheckState.Checked if count == len(paths)
+                 else Qt.CheckState.PartiallyChecked)
+        group.setCheckState(0, state)
 
     def clear_selection(self):
-        paths = tuple(self.checked)
-        self.checked.clear()
-        self.checked_size = 0
-        with QSignalBlocker(self.groups):
-            groups = set()
-            for path in paths:
-                for item in self.visible_members.get(path, ()):
-                    item.setCheckState(0, Qt.CheckState.Unchecked)
-                groups.update(self.groups_by_path.get(path,()))
-            for group in groups:
-                if not self.disk_mode:
-                    self.update_group_check(group)
-        self.update_selection()
+        self._set_checked_paths({}, tuple(self.checked))
 
     def update_selection(self):
         count = len(self.checked)
         self.selection_label.setText(f'已勾选 {count:,} 项 · {human(self.checked_size)}')
         self.clear_button.setEnabled(bool(count))
+        self.group_select_button.setEnabled(bool(self.matches))
+        self.select_all_button.setEnabled(bool(self.matches))
         self.recycle_button.setEnabled(bool(count))
-        self.recycle_button.setText(f'核对并移入回收站 {count:,} 项' if count else '预览清理')
+        if self.folder_mode:
+            self.recycle_button.setProperty('kind', 'secondary')
+            self.recycle_button.setText(f'复制 {count:,} 个文件夹路径' if count else '复制路径')
+        else:
+            self.recycle_button.setProperty('kind', 'danger')
+            self.recycle_button.setText(
+                f'核对并移入回收站 {count:,} 项' if count else '预览清理')
+        self.recycle_button.style().unpolish(self.recycle_button)
+        self.recycle_button.style().polish(self.recycle_button)
 
     def preview_cleanup(self):
-        if self.checked:
+        if not self.checked:
+            return
+        if self.folder_mode:
+            QApplication.clipboard().setText(
+                '\n'.join(sorted(self.checked))
+            )
+            self.selection_label.setText(f'已复制 {len(self.checked):,} 个文件夹路径')
+        else:
             self.recycleRequested.emit(list(self.checked.values()))
 
     def show_current(self, item, previous=None):

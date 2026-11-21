@@ -1,11 +1,11 @@
 """Drive-wide folder usage view; never moves, edits or deletes files."""
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal, QSignalBlocker
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QComboBox, QWidget, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
-    QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QApplication, QComboBox, QWidget, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
+    QPushButton, QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator, QVBoxLayout,
 )
 
 from app.disk_usage import DiskScanCancelled, fixed_drives, scan_disk
@@ -46,6 +46,7 @@ class DiskUsagePage(QWidget):
         self.mode = mode
         self.worker = None
         self.report = None
+        self.checked_paths = set()
 
         layout = QVBoxLayout(self)
         controls = QHBoxLayout()
@@ -84,16 +85,35 @@ class DiskUsagePage(QWidget):
                                    '文件数', '所在位置' if mode == 'largest' else ''])
         self.tree.setColumnHidden(4, mode != 'largest')
         self.tree.setAlternatingRowColors(True)
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree.setColumnWidth(0, 470)
         self.tree.setColumnWidth(1, 130)
         self.tree.setColumnWidth(2, 160)
         if mode == 'largest':
             self.tree.setColumnWidth(0, 240)
             self.tree.setColumnWidth(4, 310)
+        self.tree.itemChanged.connect(self.check_changed)
         self.tree.itemExpanded.connect(self.expand_folder)
         self.tree.itemDoubleClicked.connect(self.activate_item)
         self.tree.itemActivated.connect(self.activate_item)
         layout.addWidget(self.tree, 1)
+        selection = QHBoxLayout()
+        layout.addLayout(selection)
+        self.select_marked_button = QPushButton('勾选高亮文件夹')
+        self.select_marked_button.clicked.connect(self.select_marked)
+        selection.addWidget(self.select_marked_button)
+        self.select_loaded_button = QPushButton('全选已加载文件夹')
+        self.select_loaded_button.clicked.connect(self.select_loaded)
+        selection.addWidget(self.select_loaded_button)
+        self.clear_checked_button = QPushButton('清空勾选')
+        self.clear_checked_button.clicked.connect(self.clear_checked)
+        selection.addWidget(self.clear_checked_button)
+        self.selection_count = QLabel('已勾选 0 个文件夹')
+        selection.addWidget(self.selection_count, 1)
+        self.copy_selected_button = QPushButton('复制勾选路径')
+        self.copy_selected_button.clicked.connect(self.copy_checked_paths)
+        selection.addWidget(self.copy_selected_button)
+        self.update_selection()
 
         self.note = QLabel(
             '文件夹按逻辑大小统计；硬链接、压缩文件、稀疏文件及无权限目录会影响与磁盘实际占用的对应关系。'
@@ -111,6 +131,7 @@ class DiskUsagePage(QWidget):
             return
         root = self.drives.currentText()
         self.report = None
+        self.clear_checked()
         self.tree.clear()
         self.space.setText('')
         self.status.setText('准备扫描 ' + root)
@@ -146,6 +167,7 @@ class DiskUsagePage(QWidget):
 
     def render_report(self, report):
         self.report = report
+        self.clear_checked()
         self.tree.clear()
         self.space.setText(
             f'磁盘总容量 {human(report.disk_total)}  ·  '
@@ -171,6 +193,8 @@ class DiskUsagePage(QWidget):
         item = QTreeWidgetItem(parent, [name, human(size), '', f'{files:,}'])
         item.setData(0, PATH_ROLE, path)
         item.setToolTip(0, path or name)
+        if path is not None and path != self.report.root:
+            item.setCheckState(0, Qt.CheckState.Unchecked)
         if expandable:
             item.setChildIndicatorPolicy(
                 QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator
@@ -247,6 +271,69 @@ class DiskUsagePage(QWidget):
             if parent is not None:
                 parent.removeChild(item)
                 self._append_children(parent, data[1], data[2])
+
+    def check_changed(self, item, column):
+        if column != 0:
+            return
+        path = item.data(0, PATH_ROLE)
+        if not isinstance(path, str) or not self.report or path == self.report.root:
+            return
+        if item.checkState(0) == Qt.CheckState.Checked:
+            self.checked_paths.add(path)
+        else:
+            self.checked_paths.discard(path)
+        self.update_selection()
+
+    def _mark_paths(self, paths):
+        paths = set(paths)
+        with QSignalBlocker(self.tree):
+            for path in paths:
+                if self.report and path in self.report.nodes and path != self.report.root:
+                    self.checked_paths.add(path)
+            it = QTreeWidgetItemIterator(self.tree)
+            while it.value():
+                item = it.value()
+                path = item.data(0, PATH_ROLE)
+                if isinstance(path, str) and path in paths and path != self.report.root:
+                    item.setCheckState(0, Qt.CheckState.Checked)
+                it += 1
+        self.update_selection()
+
+    def select_marked(self):
+        self._mark_paths(item.data(0, PATH_ROLE)
+                         for item in self.tree.selectedItems())
+
+    def select_loaded(self):
+        paths = []
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            path = it.value().data(0, PATH_ROLE)
+            if isinstance(path, str) and self.report and path != self.report.root:
+                paths.append(path)
+            it += 1
+        self._mark_paths(paths)
+
+    def clear_checked(self):
+        self.checked_paths.clear()
+        with QSignalBlocker(self.tree):
+            it = QTreeWidgetItemIterator(self.tree)
+            while it.value():
+                item = it.value()
+                if isinstance(item.data(0, PATH_ROLE), str) and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                    item.setCheckState(0, Qt.CheckState.Unchecked)
+                it += 1
+        self.update_selection()
+
+    def update_selection(self):
+        count = len(self.checked_paths)
+        self.selection_count.setText(f'已勾选 {count:,} 个文件夹')
+        self.copy_selected_button.setEnabled(bool(count))
+        self.clear_checked_button.setEnabled(bool(count))
+
+    def copy_checked_paths(self):
+        if self.checked_paths:
+            QApplication.clipboard().setText('\n'.join(sorted(self.checked_paths)))
+            self.status.setText(f'已复制 {len(self.checked_paths):,} 个文件夹路径（未删除任何数据）')
 
     def open_folder(self):
         item = self.tree.currentItem()
