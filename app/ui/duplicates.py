@@ -129,10 +129,10 @@ class NameMatchesPage(QWidget):
         self.more_button = QPushButton('更多文件组')
         self.more_button.clicked.connect(self.load_groups)
         footer.addWidget(self.more_button)
-        self.group_select_button = QPushButton('选中当前组')
+        self.group_select_button = QPushButton('当前组批量勾选')
         self.group_select_button.clicked.connect(self.select_current_group)
         footer.addWidget(self.group_select_button)
-        self.select_all_button = QPushButton('批量选择全部组')
+        self.select_all_button = QPushButton('全部组批量勾选')
         self.select_all_button.clicked.connect(self.select_all_groups)
         footer.addWidget(self.select_all_button)
         self.clear_button = QPushButton('清空勾选')
@@ -249,10 +249,8 @@ class NameMatchesPage(QWidget):
         eligible = self.eligible_rows(rows)
         if self.folder_mode:
             return eligible
-        if self.disk_mode:
-            keeper = self.keeper_path(list(eligible.values()))
-            return {path: row for path, row in eligible.items() if path != keeper}
-        return eligible
+        keeper = self.keeper_path(list(eligible.values()))
+        return {path: row for path, row in eligible.items() if path != keeper}
 
     def select_current_group(self):
         current = self.groups.currentItem()
@@ -263,7 +261,8 @@ class NameMatchesPage(QWidget):
         if not isinstance(rows, list):
             return
         selected = self._select_group_rows(rows)
-        self._set_checked_paths(selected)
+        keeper = self.keeper_path(list(self.eligible_rows(rows).values()))
+        self._set_checked_paths(selected, (keeper,) if keeper and not self.folder_mode else ())
 
     def select_all_groups(self):
         # Operates on all scan results, not just the 150 rendered groups.
@@ -271,9 +270,8 @@ class NameMatchesPage(QWidget):
         protected = set()
         for rows in self.matches:
             eligible = self.eligible_rows(rows)
-            selected.update(eligible if self.folder_mode or not self.disk_mode
-                            else self._select_group_rows(rows))
-            if self.disk_mode:
+            selected.update(self._select_group_rows(rows))
+            if not self.folder_mode:
                 keeper = self.keeper_path(list(eligible.values()))
                 if keeper:
                     protected.add(keeper)
@@ -330,10 +328,10 @@ class NameMatchesPage(QWidget):
             return
         path = row['path']
         if item.checkState(0) == Qt.CheckState.Checked:
-            if self.disk_mode and all(
+            if not self.folder_mode and all(
                 peer == path or peer in self.checked for peer in eligible
             ):
-                # At least one scanned Office file must remain in each group.
+                # Keep at least one file in any name-matched group.
                 self._set_checked_paths({}, (path,))
                 return
             self._set_checked_paths({path: row})
@@ -373,7 +371,7 @@ class NameMatchesPage(QWidget):
             return
         if self.folder_mode:
             QApplication.clipboard().setText(
-                '\\n'.join(sorted(self.checked))
+                '\n'.join(sorted(self.checked))
             )
             self.selection_label.setText(f'已复制 {len(self.checked):,} 个文件夹路径')
         else:
