@@ -65,6 +65,7 @@ def test_sidebar_previews_and_only_checked_files_enter_recycle(tmp_path, monkeyp
     window.delete_service = service
     window.show_duplicates()
     page = window.duplicate_dialog
+    page.scope.setCurrentIndex(2)  # Legacy indexed-WeChat mode
     page.detect_button.click()
     wait_for(app, lambda: page.matches and not window.worker.isRunning())
     group = page.groups.topLevelItem(0)

@@ -165,3 +165,28 @@ def test_disk_usage_is_a_primary_embedded_page(tmp_path, monkeypatch):
     assert window.disk_usage_page is page
     assert page.report is not None
     window.close()
+
+
+def test_large_folders_rank_all_nested_directories(tmp_path):
+    import os
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    from PySide6.QtWidgets import QApplication
+    from app.ui.disk_usage import DiskUsagePage
+
+    (tmp_path/'微信资料'/'2026').mkdir(parents=True)
+    (tmp_path/'普通文档').mkdir()
+    (tmp_path/'微信资料'/'2026'/'报告.docx').write_bytes(b'123456')
+    (tmp_path/'普通文档'/'合同.docx').write_bytes(b'123')
+    report = scan_disk(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    page = DiskUsagePage(autostart=False, mode='largest')
+    page.render_report(report)
+    assert page.tree.topLevelItemCount() == report.folder_count
+    assert page.tree.topLevelItem(0).text(0) == '微信资料'
+    assert page.tree.topLevelItem(0).text(1)
+    assert page.tree.topLevelItem(0).text(4) == str(tmp_path)
+    assert {page.tree.topLevelItem(i).text(0)
+            for i in range(page.tree.topLevelItemCount())} == {
+                '微信资料', '2026', '普通文档'
+            }
+    page.close()

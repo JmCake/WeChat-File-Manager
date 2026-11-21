@@ -59,8 +59,9 @@ class CleanupPreview(QAbstractTableModel):
         return True
 
 class DeleteDialog(QDialog):
-    def __init__(self,plan,parent=None):
+    def __init__(self,plan,parent=None,disk_scope=False):
         super().__init__(parent);self.plan=plan;self.setWindowTitle('预览清理清单')
+        self.disk_scope=disk_scope
         available=self.screen().availableGeometry()
         self.resize(min(1000,available.width()-40),min(590,available.height()-55))
         layout=QVBoxLayout(self)
@@ -78,7 +79,10 @@ class DeleteDialog(QDialog):
         layout.addWidget(self.paths)
         self.list.selectionModel().currentChanged.connect(self.show_paths)
         if plan.items:self.list.setCurrentIndex(self.preview_model.index(0,0))
-        warning=QLabel('移入回收站后，微信可能无法打开对应聊天附件。请核对勾选的文件。')
+        warning=QLabel(
+            '名称相近不代表内容重复。请预览并保留至少一份；回收站操作可能影响微信或其他应用引用。'
+            if disk_scope else
+            '移入回收站后，微信可能无法打开对应聊天附件。请核对勾选的文件。')
         warning.setWordWrap(True);layout.addWidget(warning)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel);self.confirm=buttons.button(QDialogButtonBox.StandardButton.Ok);self.confirm.setText('移入回收站');self.confirm.setProperty('kind','danger');layout.addWidget(buttons)
         cancel=buttons.button(QDialogButtonBox.StandardButton.Cancel)
@@ -89,7 +93,7 @@ class DeleteDialog(QDialog):
         account_text='、'.join(accounts[:4])
         if len(accounts)>4:account_text+=f' 等 {len(accounts)} 个账号'
         def changed():
-            summary.setText(f'计划 {len(plan.items):,} 项 · 已勾选 {self.preview_model.count:,} 项 · 预计接收 {human(self.preview_model.size)}\n涉及账号 {account_text}。可在列表中取消个别勾选。')
+            summary.setText(f'计划 {len(plan.items):,} 项 · 已勾选 {self.preview_model.count:,} 项 · 预计接收 {human(self.preview_model.size)}\n涉及' + ('目录' if disk_scope else '账号') + f' {account_text}。可在列表中取消个别勾选。')
             self.confirm.setEnabled(bool(self.preview_model.count))
         self.preview_model.changed.connect(changed)
         changed()

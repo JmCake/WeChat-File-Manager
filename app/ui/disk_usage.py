@@ -39,8 +39,11 @@ class DiskScanWorker(QThread):
 
 
 class DiskUsagePage(QWidget):
-    def __init__(self, parent=None, autostart=True):
+    def __init__(self, parent=None, autostart=True, mode='tree'):
         super().__init__(parent)
+        if mode not in {'tree','largest'}:
+            raise ValueError('未知的磁盘查看方式')
+        self.mode = mode
         self.worker = None
         self.report = None
 
@@ -76,11 +79,17 @@ class DiskUsagePage(QWidget):
         layout.addWidget(self.busy)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(['文件夹', '逻辑大小', '占当前目录', '文件数'])
+        self.tree.setHeaderLabels(['文件夹', '逻辑大小',
+                                   '占扫描总量' if mode == 'largest' else '占当前目录',
+                                   '文件数', '所在位置' if mode == 'largest' else ''])
+        self.tree.setColumnHidden(4, mode != 'largest')
         self.tree.setAlternatingRowColors(True)
         self.tree.setColumnWidth(0, 470)
         self.tree.setColumnWidth(1, 130)
-        self.tree.setColumnWidth(2, 180)
+        self.tree.setColumnWidth(2, 160)
+        if mode == 'largest':
+            self.tree.setColumnWidth(0, 240)
+            self.tree.setColumnWidth(4, 310)
         self.tree.itemExpanded.connect(self.expand_folder)
         self.tree.itemDoubleClicked.connect(self.activate_item)
         self.tree.itemActivated.connect(self.activate_item)
@@ -151,9 +160,12 @@ class DiskUsagePage(QWidget):
             + (f'  ·  重复硬链接 {report.repeated_hardlinks:,} 项' if report.repeated_hardlinks else '')
         )
         root = report.nodes[report.root]
-        item = self._make_item(self.tree, root.path, root.name, root.total_bytes,
-                               root.total_bytes, root.total_files, True)
-        item.setExpanded(True)
+        if self.mode == 'largest':
+            self._append_largest(0)
+        else:
+            item = self._make_item(self.tree, root.path, root.name, root.total_bytes,
+                                   root.total_bytes, root.total_files, True)
+            item.setExpanded(True)
 
     def _make_item(self, parent, path, name, size, parent_size, files, expandable):
         item = QTreeWidgetItem(parent, [name, human(size), '', f'{files:,}'])
@@ -170,6 +182,25 @@ class DiskUsagePage(QWidget):
         bar.setFormat(f'{percentage:.1f}%')
         self.tree.setItemWidget(item, 2, bar)
         return item
+
+    def _append_largest(self, start):
+        if not self.report:
+            return
+        if not hasattr(self, '_ranked_paths') or start == 0:
+            self._ranked_paths = sorted(
+                (path for path in self.report.nodes if path != self.report.root),
+                key=lambda path: (-self.report.nodes[path].total_bytes, path.casefold()),
+            )
+        root_size = self.report.nodes[self.report.root].total_bytes
+        for path in self._ranked_paths[start:start + PAGE_SIZE]:
+            node = self.report.nodes[path]
+            item = self._make_item(self.tree, node.path, node.name,
+                                   node.total_bytes, root_size, node.total_files, False)
+            item.setText(4, str(Path(path).parent))
+        count = len(self._ranked_paths) - start - PAGE_SIZE
+        if count > 0:
+            more = QTreeWidgetItem(self.tree, [f'双击加载更多（剩余 {count:,} 个文件夹）'])
+            more.setData(0, PATH_ROLE, ('rank_more', start + PAGE_SIZE))
 
     def expand_folder(self, item):
         if not self.report or item.data(0, LOADED_ROLE):
@@ -206,6 +237,11 @@ class DiskUsagePage(QWidget):
 
     def activate_item(self, item, column=0):
         data = item.data(0, PATH_ROLE)
+        if isinstance(data, tuple) and len(data) == 2 and data[0] == 'rank_more':
+            index = self.tree.indexOfTopLevelItem(item)
+            self.tree.takeTopLevelItem(index)
+            self._append_largest(data[1])
+            return
         if isinstance(data, tuple) and len(data) == 3 and data[0] == 'more':
             parent = item.parent()
             if parent is not None:

@@ -34,7 +34,7 @@ def demo_window(tmp_path):
 def test_sidebar_has_direct_navigation_and_visible_categories(tmp_path):
     app, window = demo_window(tmp_path)
     keys = ['directory', 'disk', 'duplicates', 'search',
-            'favorite', 'recent', 'large', 'missing']
+            'favorite', 'recent', 'large', 'large_folders', 'missing']
     assert list(window.nav_buttons) == keys
     assert all(window.nav_buttons[key].isVisibleTo(window) for key in keys)
     assert all(window.nav_buttons[key].isCheckable() for key in keys)
