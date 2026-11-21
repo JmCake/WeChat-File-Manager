@@ -25,6 +25,9 @@ from app.ui.preview import PreviewController,supports_preview
 from app.ui.duplicates import NameMatchesPage
 from app.ui.statistics_view import StatisticsDialog
 from app.ui.disk_usage import DiskUsagePage
+from app.disk_office_scan import scan_office_matches, scan_similar_folders
+from app.disk_usage import DiskScanCancelled
+from app.disk_office_cleanup import DiskOfficeCleanup
 from app.file_monitor import FileMonitor
 from app.directory_mapper import describe_directory,virtual_sections
 from app.delete_service import DeleteService
@@ -90,6 +93,7 @@ class Window(QMainWindow):
         nav_button('favorite','收藏文件',QStyle.StandardPixmap.SP_DialogApplyButton)
         nav_button('recent','最近文件',QStyle.StandardPixmap.SP_FileDialogListView)
         nav_button('large','大文件',QStyle.StandardPixmap.SP_FileDialogDetailedView)
+        nav_button('large_folders','大文件夹',QStyle.StandardPixmap.SP_DirIcon)
         nav_button('missing','失效文件',QStyle.StandardPixmap.SP_FileIcon)
         sidebar.addSpacing(12)
         heading('工具')
@@ -188,7 +192,8 @@ class Window(QMainWindow):
         self.tree.itemExpanded.connect(self.expand_directory)
         self.directory_mode.currentIndexChanged.connect(self.change_directory_view)
         self.delete_service=DeleteService(self.store)
-        self.monitor=None;self.duplicate_dialog=None;self.disk_usage_page=None;self.statistics_dialog=None;self.task_kind=''
+        self.disk_cleanup_service=DiskOfficeCleanup(self.store)
+        self.monitor=None;self.duplicate_dialog=None;self.disk_usage_page=None;self.large_folders_page=None;self.statistics_dialog=None;self.task_kind=''
         self.duplicate_revision=0
         self.monitor_signals=MonitorSignals(self);self.monitor_signals.updated.connect(self.monitor_updated);self.monitor_signals.status.connect(self.monitor_status)
         self.monitor_label=QLabel('空闲 · 自动监控未开启');self.monitor_label.setMaximumWidth(480);self.monitor_label.setTextFormat(Qt.TextFormat.PlainText);self.statusBar().addPermanentWidget(self.monitor_label)
@@ -238,9 +243,9 @@ class Window(QMainWindow):
         elif page=='search':
             self.nav={}
         for key,button in self.nav_buttons.items():button.setChecked(key==page)
-        self.account.setVisible(page not in {'duplicates','disk'})
-        self.scan_button.setVisible(page!='disk')
-        self.query.setVisible(page!='disk')
+        self.account.setVisible(page not in {'duplicates','disk','large_folders'})
+        self.scan_button.setVisible(page not in {'disk','large_folders'})
+        self.query.setVisible(page not in {'disk','large_folders'})
         self.page_title.setText(self.nav_buttons[page].text())
         if page=='duplicates':
             self.ensure_duplicates()
@@ -250,6 +255,11 @@ class Window(QMainWindow):
                 self.disk_usage_page=DiskUsagePage(self)
                 self.pages.addWidget(self.disk_usage_page)
             self.pages.setCurrentWidget(self.disk_usage_page)
+        elif page=='large_folders':
+            if self.large_folders_page is None:
+                self.large_folders_page=DiskUsagePage(self,mode='largest')
+                self.pages.addWidget(self.large_folders_page)
+            self.pages.setCurrentWidget(self.large_folders_page)
         else:
             self.pages.setCurrentIndex(0)
         self.directory_panel.setVisible(page=='directory')
@@ -258,7 +268,7 @@ class Window(QMainWindow):
         self.advanced_button.setVisible(page=='search')
         self.filters.setVisible(page=='search' and self.advanced_button.isChecked())
         self.detail_scroll.setVisible(self.details_button.isChecked())
-        if old!=page and page not in {'duplicates','disk'}:
+        if old!=page and page not in {'duplicates','disk','large_folders'}:
             self.reload()
         return True
 
@@ -801,26 +811,50 @@ class Window(QMainWindow):
             self.update_progress('当前有任务在运行，可先点「停止任务」。')
             return
         revision=self.duplicate_revision
-        self.update_progress('正在查找名称相近的文件…')
+        page=self.duplicate_dialog
+        source=page.current_source()
+        root=page.drives.currentText()
+        include_pdf=page.format_filter.currentData()
+        if source in {'disk','folder'} and not root:
+            QMessageBox.warning(self,'磁盘不可用','没有找到可扫描的本地磁盘。')
+            return
+        self.update_progress('正在递归查找 '+(root if source!='wechat' else '微信索引')+'…')
         def detect(progress):
             cancelled=QThread.currentThread().isInterruptionRequested
             try:
+                if source=='disk':
+                    return scan_office_matches(root,include_pdf,cancelled,progress)
+                if source=='folder':
+                    return scan_similar_folders(root,cancelled,progress)
                 return name_groups(self.store,cancelled,progress)
-            except HashCancelled:
+            except (HashCancelled,DiskScanCancelled):
                 return None
-        self.start_worker(detect,lambda out:self.name_detection_done(out,revision),True)
+        self.start_worker(detect,lambda out:self.name_detection_done(out,revision,source),True)
 
-    def name_detection_done(self,out,revision):
-        if revision!=self.duplicate_revision:
-            self.update_progress('索引已变化，请重新查找相近名称。')
+    def name_detection_done(self,out,revision,source='wechat'):
+        if revision!=self.duplicate_revision or source!=self.duplicate_dialog.current_source():
+            self.update_progress('扫描范围或文件索引已更新，请重新扫描。')
         elif 'error' in out:
-            self.update_progress('名称查找失败：'+out['error'])
+            self.update_progress('查找失败：'+out['error'])
         elif out['result'] is None:
-            self.update_progress('已停止名称查找。')
-        else:
+            self.update_progress('已停止查找。')
+        elif source=='wechat':
             groups,skipped=out['result']
-            self.duplicate_dialog.set_results(groups,f'名称相近 {len(groups):,} 组 · 跳过 {skipped:,} 个文件。请核对内容后勾选。')
+            self.duplicate_dialog.set_results(
+                groups,f'微信索引中名称相近 {len(groups):,} 组 · 跳过 {skipped:,} 个文件。')
             self.update_progress('展开文件组，单击文件可在右侧预览。')
+        else:
+            groups,stats=out['result']
+            kind='办公文件' if source=='disk' else '文件夹'
+            info=f'{stats["root"]}（含全部子文件夹） · {kind}相近 {len(groups):,} 组'
+            info+=f' · 扫描 {stats["folders"]:,} 个文件夹'
+            if stats['errors']:
+                info+=f' · 访问异常 {stats["errors"]:,} 处（结果可能不完整）'
+            info+='。' + ('仅展示匹配结果，不删除文件夹。' if source=='folder'
+                          else '名称相近不代表内容相同；请逐项核对，只会移入回收站。')
+            self.duplicate_dialog.set_results(
+                groups,info,disk_mode=source=='disk',folder_mode=source=='folder')
+            self.update_progress(f'扫描完成：{len(groups):,} 组相近{kind}。')
 
     def start_monitor(self):
         if self.monitor and self.monitor.thread and self.monitor.thread.is_alive():return
@@ -871,8 +905,46 @@ class Window(QMainWindow):
         QMessageBox.information(self,'批量操作结果',f'成功 {r["success"]:,}；实际变更 {r["changed"]:,}；失败 {len(r["failures"])}'+('\n已取消，未提交变更' if r['cancelled'] else '')+'\n'+'\n'.join(r['failures'][:10]))
 
     def preview_name_matches(self,rows):
-        snapshots={row['path']:indexed_signature(row) for row in rows}
-        self.delete_paths(list(snapshots),expected_snapshots=snapshots)
+        if self.duplicate_dialog and self.duplicate_dialog.disk_mode:
+            self.prepare_disk_cleanup(rows)
+        else:
+            snapshots={row['path']:indexed_signature(row) for row in rows}
+            self.delete_paths(list(snapshots),expected_snapshots=snapshots)
+
+    def prepare_disk_cleanup(self,rows):
+        if self.worker and self.worker.isRunning():
+            QMessageBox.information(self,'任务运行中','请先停止当前任务。')
+            return
+        if not self.confirm_pending():return
+        groups=self.duplicate_dialog.matches
+        def prepare(progress):
+            return self.disk_cleanup_service.prepare(
+                rows,groups,QThread.currentThread().isInterruptionRequested,progress)
+        self.start_worker(prepare,self.disk_cleanup_prepared,True)
+
+    def disk_cleanup_prepared(self,out):
+        if self.worker and self.worker.isRunning():
+            QTimer.singleShot(20,lambda:self.disk_cleanup_prepared(out))
+            return
+        if 'error' in out:
+            QMessageBox.warning(self,'无法准备清理',out['error'])
+            return
+        plan=out['result']
+        dialog=DeleteDialog(plan,self,disk_scope=True)
+        if dialog.exec()!=QDialog.DialogCode.Accepted:
+            self.update_progress('已取消，没有修改任何文件。')
+            return
+        excluded=dialog.excluded_paths()
+        self.start_worker(
+            lambda progress:self.disk_cleanup_service.execute(
+                plan,True,True,QThread.currentThread().isInterruptionRequested,
+                progress,excluded),
+            self.disk_cleanup_done,True)
+
+    def disk_cleanup_done(self,out):
+        if 'result' in out and out['result'].get('success'):
+            self.invalidate_duplicates()
+        self.delete_done(out)
 
     def delete_paths(self,paths,expected_snapshots=None):
         if not paths:QMessageBox.information(self,'选择文件','请主动选择需要处理的文件。');return
@@ -956,8 +1028,10 @@ class Window(QMainWindow):
             iterator+=1
 
     def closeEvent(self,event):
-        if self.disk_usage_page and self.disk_usage_page.worker and self.disk_usage_page.worker.isRunning():
-            self.disk_usage_page.stop_scan()
+        if any(p is not None and p.worker is not None and p.worker.isRunning()
+               for p in (self.disk_usage_page,self.large_folders_page)):
+            for p in (self.disk_usage_page,self.large_folders_page):
+                if p is not None:p.stop_scan()
             QMessageBox.information(self,'磁盘扫描仍在运行','已请求停止磁盘扫描，请在扫描结束后关闭程序。')
             event.ignore()
             return
