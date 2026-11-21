@@ -332,7 +332,7 @@ class DiskUsagePage(QWidget):
 
     def copy_checked_paths(self):
         if self.checked_paths:
-            QApplication.clipboard().setText('\\n'.join(sorted(self.checked_paths)))
+            QApplication.clipboard().setText('\n'.join(sorted(self.checked_paths)))
             self.status.setText(f'已复制 {len(self.checked_paths):,} 个文件夹路径（未删除任何数据）')
 
     def open_folder(self):
