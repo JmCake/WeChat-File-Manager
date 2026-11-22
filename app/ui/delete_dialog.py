@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 from PySide6.QtCore import Qt,QAbstractTableModel,QModelIndex,Signal
-from PySide6.QtWidgets import QDialog,QVBoxLayout,QLabel,QTreeWidget,QTreeWidgetItem,QDialogButtonBox,QPushButton,QTableView,QPlainTextEdit
+from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLabel,QTreeWidget,QTreeWidgetItem,QDialogButtonBox,QPushButton,QTableView,QPlainTextEdit
 from app.paths import human
 
 RESULT_LABELS={'pending':'执行中 / 待核对','success':'已移入回收站','failed':'失败','skipped':'跳过','cancelled':'已取消','uncertain':'需核对回收站'}
@@ -16,6 +16,31 @@ class CleanupPreview(QAbstractTableModel):
         self.excluded=set()
         self.count=sum(item.allowed for item in items)
         self.size=sum(item.size for item in items if item.allowed)
+
+    def select_all_eligible(self):
+        # Items were checked automatically when the plan was prepared.
+        # This restores them after optional user deselection.
+        if not self.excluded:
+            return
+        self.excluded.clear()
+        self.count=sum(item.allowed for item in self.items)
+        self.size=sum(item.size for item in self.items if item.allowed)
+        if self.items:
+            self.dataChanged.emit(self.index(0,0),self.index(len(self.items)-1,0),
+                                  [Qt.ItemDataRole.CheckStateRole])
+        self.changed.emit()
+
+    def deselect_all(self):
+        excluded={item.path for item in self.items if item.allowed}
+        if excluded==self.excluded:
+            return
+        self.excluded=excluded
+        self.count=0
+        self.size=0
+        if self.items:
+            self.dataChanged.emit(self.index(0,0),self.index(len(self.items)-1,0),
+                                  [Qt.ItemDataRole.CheckStateRole])
+        self.changed.emit()
 
     def rowCount(self,parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.items)
@@ -66,8 +91,24 @@ class DeleteDialog(QDialog):
         self.resize(min(1000,available.width()-40),min(590,available.height()-55))
         layout=QVBoxLayout(self)
         self.preview_model=CleanupPreview(plan.items,self)
+        invalid=sum(not item.allowed for item in plan.items)
         summary=QLabel()
         summary.setWordWrap(True);summary.setTextFormat(Qt.TextFormat.PlainText);layout.addWidget(summary)
+        if invalid:
+            invalid_notice=QLabel(
+                f'预检查未通过 {invalid:,} 项，已自动排除，无法勾选或删除。'
+                '如显示文件不存在，请先重新扫描文件索引。')
+            invalid_notice.setWordWrap(True)
+            layout.addWidget(invalid_notice)
+        selection_actions=QHBoxLayout()
+        layout.addLayout(selection_actions)
+        self.select_all_button=QPushButton('恢复全部有效勾选')
+        self.select_all_button.clicked.connect(self.preview_model.select_all_eligible)
+        selection_actions.addWidget(self.select_all_button)
+        self.deselect_all_button=QPushButton('取消全部勾选')
+        self.deselect_all_button.clicked.connect(self.preview_model.deselect_all)
+        selection_actions.addWidget(self.deselect_all_button)
+        selection_actions.addStretch()
         self.list=QTableView();self.list.setMinimumHeight(65);self.list.setModel(self.preview_model);layout.addWidget(self.list,1)
         self.list.verticalHeader().hide()
         self.list.setColumnWidth(0,170);self.list.setColumnWidth(1,155);self.list.setColumnWidth(2,72)
@@ -93,8 +134,15 @@ class DeleteDialog(QDialog):
         account_text='、'.join(accounts[:4])
         if len(accounts)>4:account_text+=f' 等 {len(accounts)} 个账号'
         def changed():
-            summary.setText(f'计划 {len(plan.items):,} 项 · 已勾选 {self.preview_model.count:,} 项 · 预计接收 {human(self.preview_model.size)}\n涉及' + ('目录' if disk_scope else '账号') + f' {account_text}。可在列表中取消个别勾选。')
+            summary.setText(
+                f'上一步选择 {len(plan.items):,} 项 · 自动勾选可处理 {self.preview_model.count:,} 项'
+                f' · 不可处理 {invalid:,} 项 · 预计接收 {human(self.preview_model.size)}'
+                '\n涉及' + ('目录' if disk_scope else '账号') + f' {account_text}。无需再次勾选，可取消个别项目。')
             self.confirm.setEnabled(bool(self.preview_model.count))
+            self.select_all_button.setEnabled(
+                any(item.allowed for item in plan.items) and
+                self.preview_model.count<sum(item.allowed for item in plan.items))
+            self.deselect_all_button.setEnabled(bool(self.preview_model.count))
         self.preview_model.changed.connect(changed)
         changed()
 
