@@ -133,10 +133,12 @@ class DeleteDialog(QDialog):
         accounts=sorted({item.account_name for item in plan.items})
         account_text='、'.join(accounts[:4])
         if len(accounts)>4:account_text+=f' 等 {len(accounts)} 个账号'
+        eligible=len(plan.items)-invalid
         def changed():
             summary.setText(
-                f'上一步选择 {len(plan.items):,} 项 · 自动勾选可处理 {self.preview_model.count:,} 项'
-                f' · 不可处理 {invalid:,} 项 · 预计接收 {human(self.preview_model.size)}'
+                f'上一步已选择 {len(plan.items):,} 项 · 可处理 {eligible:,} 项'
+                f' · 自动勾选/当前保留 {self.preview_model.count:,} 项'
+                f' · 跳过 {invalid:,} 项 · 预计接收 {human(self.preview_model.size)}'
                 '\n涉及' + ('目录' if disk_scope else '账号') + f' {account_text}。无需再次勾选，可取消个别项目。')
             self.confirm.setEnabled(bool(self.preview_model.count))
             self.select_all_button.setEnabled(
@@ -152,7 +154,8 @@ class DeleteDialog(QDialog):
     def show_paths(self,current,previous):
         if not current.isValid():return
         item=self.plan.items[current.row()]
-        text=f'待回收：{item.path}'
+        text=('待确认移入回收站（尚未执行）：' if item.allowed
+              else '预检查未通过（不会删除）：') + item.path
         if item.keeper:text=f'保留：{item.keeper.path}\n'+text
         self.paths.setPlainText(text)
 
