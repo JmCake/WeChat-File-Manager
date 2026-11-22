@@ -107,6 +107,11 @@ class DiskOfficeCleanup:
         self._plans = {plan.token: plan}
         return plan
 
+    def discard(self, plan):
+        """Invalidate an unexecuted preview without writing deletion history."""
+        if self._plans.get(plan.token) is plan:
+            del self._plans[plan.token]
+
     def _log(self, plan, item, result, reason, log_id=None):
         with self.store.connect() as db:
             if log_id is not None:

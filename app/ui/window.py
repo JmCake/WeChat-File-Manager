@@ -937,6 +937,36 @@ class Window(QMainWindow):
                 rows,groups,QThread.currentThread().isInterruptionRequested,progress)
         self.start_worker(prepare,self.disk_cleanup_prepared,True)
 
+    def handle_unavailable_cleanup(self, plan, service, disk_scope=False):
+        """Explain a fully invalid selection instead of opening 15 disabled checkboxes."""
+        if any(item.allowed for item in plan.items):
+            return False
+        service.discard(plan)
+        count=len(plan.items)
+        dialog=QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle('无可处理文件')
+        dialog.setText(f'上一步选择的 {count:,} 项均未通过预检查，没有执行任何删除。')
+        dialog.setInformativeText(
+            '这些文件可能已被移动、已删除、修改过，或当前无法访问。'
+            '只有预检查合格的文件才允许移入回收站；原路径失效不代表回收站已接收。'
+            '\n建议先重新扫描，再选择仍存在的文件。')
+        dialog.setDetailedText('\n'.join(
+            f'{Path(item.path).name}：{item.reason}' for item in plan.items[:100]
+        ))
+        refresh=dialog.addButton(
+            '重新扫描 D 盘' if disk_scope else '刷新微信目录索引',
+            QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton('关闭', QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        self.update_progress(f'{count:,} 项预检查未通过；未执行删除。')
+        if dialog.clickedButton() is refresh:
+            if disk_scope:
+                self.run_name_detection()
+            else:
+                self.scan()
+        return True
+
     def disk_cleanup_prepared(self,out):
         if self.worker and self.worker.isRunning():
             QTimer.singleShot(20,lambda:self.disk_cleanup_prepared(out))
@@ -945,8 +975,11 @@ class Window(QMainWindow):
             QMessageBox.warning(self,'无法准备清理',out['error'])
             return
         plan=out['result']
+        if self.handle_unavailable_cleanup(plan,self.disk_cleanup_service,disk_scope=True):
+            return
         dialog=DeleteDialog(plan,self,disk_scope=True)
         if dialog.exec()!=QDialog.DialogCode.Accepted:
+            self.disk_cleanup_service.discard(plan)
             self.update_progress('已取消，没有修改任何文件。')
             return
         excluded=dialog.excluded_paths()
@@ -975,11 +1008,14 @@ class Window(QMainWindow):
     def delete_prepared(self,out):
         if self.worker and self.worker.isRunning():QTimer.singleShot(10,lambda:self.delete_prepared(out));return
         if 'error' in out:QMessageBox.warning(self,'未开始删除',out['error']);return
-        plan=out['result'];dialog=DeleteDialog(plan,self)
+        plan=out['result']
+        if self.handle_unavailable_cleanup(plan,self.delete_service):
+            return
+        dialog=DeleteDialog(plan,self)
         if dialog.exec()!=QDialog.DialogCode.Accepted:
+            self.delete_service.discard(plan)
             self.task_kind='delete_cancel'
-            self.start_worker(lambda progress:self.delete_service.execute(plan,confirmed=False),
-                              lambda result:self.update_progress(result.get('error','已取消，没有删除文件。')))
+            self.update_progress('已取消，没有删除文件。')
             return
         excluded=dialog.excluded_paths()
         self.task_kind='delete'
